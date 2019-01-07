@@ -14,10 +14,12 @@ import visualize
 
 import pygame
 
-GAME_TICKS = 200
+GAME_TICKS = 1000
 
-X_LIMIT = 500
-Y_LIMIT = 500
+X_LIMIT = 800
+Y_LIMIT = 800
+
+NO_PYGAME = False
 
 BACKGROUND_COLOR = (125, 125, 125)
 
@@ -26,10 +28,16 @@ pygame.init()
 screen = pygame.display.set_mode((X_LIMIT, Y_LIMIT))
 
 pygame.font.init()
-myfont = pygame.font.SysFont('Comic Sans MS', 16)
+myfont = pygame.font.SysFont('Comic Sans MS', 12)
+
+slow_motion = False
+num_sheeps = 10
 
 
 def eval_genomes(genomes, config):
+    
+    global slow_motion
+    global num_sheeps
 
     nets = []
 
@@ -38,7 +46,7 @@ def eval_genomes(genomes, config):
         nets.append(neat.nn.FeedForwardNetwork.create(genome, config))
         num_wolves += 1
     
-    eval_game = game.Game(num_wolves, screen)
+    eval_game = game.Game(num_wolves, screen, num_sheeps)
     
     i = 0
     for genome_id, genome in genomes:
@@ -62,30 +70,44 @@ def eval_genomes(genomes, config):
             genome.fitness = eval_game.get_fitness(i)  
             i += 1
 
-
-        for event in pygame.event.get():
-            if event.type == pygame.KEYDOWN:
-                pygame.time.wait(10000)
-            if event.type == pygame.QUIT:
-                return
-
+        if NO_PYGAME == False: 
             
-        for wolf in eval_game.wolves:
-            wolf.draw(screen)
-        for sheep in eval_game.sheeps:
-            sheep.draw(screen)
+            for event in pygame.event.get():
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_DOWN:
+                        if num_sheeps > 1:
+                            num_sheeps -= 1
+                    else:
+                        if event.key == pygame.K_UP:
+                            num_sheeps +=1
+                        else:
+                            if slow_motion == True:
+                                slow_motion = False
+                            else:
+                                slow_motion = True
+                if event.type == pygame.QUIT:
+                    return
 
-        i = 0
+            if slow_motion == True:
+                pygame.time.wait(100)
+           
+            for wolf in eval_game.wolves:
+                wolf.draw(screen)
+            for sheep in eval_game.sheeps:
+                sheep.draw(screen)
 
-        for wolf in eval_game.wolves:
-            text = myfont.render(str(wolf.energy), False, (0, 0, 0))
+            i = 0
+
+            # for wolf in eval_game.wolves:
+            #     text = myfont.render(str(int(wolf.energy)), False, (0, 0, 0))
+            #     screen.blit(text,(0,i))
+            #     i += 11
+            
+            # i += 11
+            text = myfont.render(str(eval_game.ticks), False, (0, 0, 0))
             screen.blit(text,(0,i))
-            i += 11
-        
-        text = myfont.render(str(eval_game.ticks), False, (0, 0, 0))
-        screen.blit(text,(0,i))
 
-        pygame.display.update()
+            pygame.display.update()
 
 
 def run():
@@ -107,7 +129,7 @@ def run():
     pop.add_reporter(stats)
     pop.add_reporter(neat.Checkpointer(5))
 
-    winner = pop.run(eval_genomes, 1000)
+    winner = pop.run(eval_genomes, 200)
 
     # Save the winner.
     with open('winner-feedforward', 'wb') as f:
@@ -117,18 +139,18 @@ def run():
 
     pygame.quit()
 
-    # visualize.plot_stats(stats, ylog=True, view=True, filename="feedforward-fitness.svg")
-    # visualize.plot_species(stats, view=True, filename="feedforward-speciation.svg")
+    visualize.plot_stats(stats, ylog=True, view=True, filename="feedforward-fitness.svg")
+    visualize.plot_species(stats, view=True, filename="feedforward-speciation.svg")
 
-    # node_names = {-1: 'x', -2: 'dx', -3: 'theta', -4: 'dtheta', 0: 'control'}
-    # visualize.draw_net(config, winner, True, node_names=node_names)
+    node_names = {-1: 'x', -2: 'dx', -3: 'theta', -4: 'dtheta', 0: 'control'}
+    visualize.draw_net(config, winner, True, node_names=node_names)
 
-    # visualize.draw_net(config, winner, view=True, node_names=node_names,
-    #                    filename="winner-feedforward.gv")
-    # visualize.draw_net(config, winner, view=True, node_names=node_names,
-    #                    filename="winner-feedforward-enabled.gv", show_disabled=False)
-    # visualize.draw_net(config, winner, view=True, node_names=node_names,
-    #                    filename="winner-feedforward-enabled-pruned.gv", show_disabled=False, prune_unused=True)
+    visualize.draw_net(config, winner, view=True, node_names=node_names,
+                       filename="winner-feedforward.gv")
+    visualize.draw_net(config, winner, view=True, node_names=node_names,
+                       filename="winner-feedforward-enabled.gv", show_disabled=False)
+    visualize.draw_net(config, winner, view=True, node_names=node_names,
+                       filename="winner-feedforward-enabled-pruned.gv", show_disabled=False, prune_unused=True)
 
 
 if __name__ == '__main__':

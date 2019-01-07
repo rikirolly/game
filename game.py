@@ -8,35 +8,37 @@ import numpy as np
 
 BIG_NUMBER = 100000000.0
 
-SPEED_DELTA_ANGLE_THRESHOLD = 2*np.pi/4
+SPEED_DELTA_ANGLE_THRESHOLD = 2*np.pi/16
 MAGNITUDE_THRESHOLD = 8
 
-WOLF_INITIAL_ENERGY = 250
+WOLF_INITIAL_ENERGY = 1000
 
 BACKGROUND_COLOR = (125, 125, 125)
 WOLVES_COLOR = (0, 0, 0)
 SHEEPS_COLOR = (255, 255, 255)
 
-X_LIMIT = 500
-Y_LIMIT = 500
+X_LIMIT = 800
+Y_LIMIT = 800
 
-WOLF_SPEED_LIMIT = 6
-WOLF_ACCEL_LIMIT = 2
+WOLF_SPEED_LIMIT = 7.0
+WOLF_ACCEL_LIMIT = 2.0
+WOLF_MAGNITUDE_SCALING = 0.5
+WOLF_ANGLE_SCALING = 0.5
 
-SHEEP_SPEED_LIMIT = 6
-SHEEP_ACCEL_LIMIT = 2
+SHEEP_SPEED_LIMIT = 6.0
+SHEEP_ACCEL_LIMIT = 3.0
+SHEEP_MAGNITUDE_SCALING = 0.5
+SHEEP_ANGLE_SCALING = 0.5
 
-X_ACCEL_LIMIT = 5
-Y_ACCEL_LIMIT = 5
-
-WOLVES_RADIUS = 2
+WOLVES_RADIUS = 3
 
 MAX_SHEEPS = 10
-SHEEPS_RADIUS = 2
+SHEEPS_RADIUS = 3
 
+# ------------ Game ------------
 
 class Game(object):
-    def __init__(self, num_wolves, screen):
+    def __init__(self, num_wolves, screen, num_sheeps):
         self.ticks = 0
         self.prev_best = 0
         self.screen = screen
@@ -48,7 +50,7 @@ class Game(object):
             self.wolves.append(x)
 
         self.sheeps = []
-        for count in range(0,MAX_SHEEPS):
+        for count in range(0,num_sheeps):
             x = Sheep()
             self.sheeps.append(x)
 
@@ -62,8 +64,8 @@ class Game(object):
         min_magnitude = BIG_NUMBER
         min_delta_x = BIG_NUMBER
         min_delta_y = BIG_NUMBER
-        self.wolves[i].energy -= 1
-        speed_delta_angle = 0
+        # self.wolves[i].energy -= 1
+        delta_angle = 0
         min_sheep = Sheep()
         for sheep in self.sheeps:
             delta_x = sheep.x-self.wolves[i].x
@@ -77,12 +79,12 @@ class Game(object):
                 min_delta_x = delta_x
                 min_delta_y = delta_y
                 min_magnitude = magnitude
-                sheep_vector = [sheep.x_speed, sheep.y_speed]
+                direction_vector = [min_delta_x, min_delta_y]
                 wolf_vector = [self.wolves[i].x_speed, self.wolves[i].y_speed]
-                speed_delta_angle = np.arccos(np.dot(sheep_vector,wolf_vector)/(np.linalg.norm(sheep_vector)*np.linalg.norm(wolf_vector)))
+                delta_angle = np.arccos(np.dot(direction_vector,wolf_vector)/(np.linalg.norm(direction_vector)*np.linalg.norm(wolf_vector)))
                 min_sheep = sheep
-        if min_magnitude < MAGNITUDE_THRESHOLD:# and (speed_delta_angle < SPEED_DELTA_ANGLE_THRESHOLD or speed_delta_angle > np.pi*2-SPEED_DELTA_ANGLE_THRESHOLD):
-            self.wolves[i].energy += WOLF_INITIAL_ENERGY
+        if min_magnitude < MAGNITUDE_THRESHOLD and (delta_angle < SPEED_DELTA_ANGLE_THRESHOLD or delta_angle > np.pi*2-SPEED_DELTA_ANGLE_THRESHOLD):
+            self.wolves[i].energy += 10
             if self.wolves[i].energy > self.wolves[self.prev_best].energy:
                 self.wolves[self.prev_best].best = False
                 self.wolves[i].best = True
@@ -90,19 +92,23 @@ class Game(object):
             min_sheep.reset()
         if self.wolves[i].best == True:
             pygame.draw.line(self.screen, (255, 0, 0), (int(self.wolves[i].x),int(self.wolves[i].y)),(int(self.wolves[i].x+min_delta_x),int(self.wolves[i].y+min_delta_y)))
-        return [min_delta_x/X_LIMIT/2+0.5, min_delta_y/Y_LIMIT/2+0.5, speed_delta_angle/2/np.pi]
 
+        self.wolves[i].energy -= min_magnitude/X_LIMIT
+        return [min_delta_x/X_LIMIT*2, min_delta_y/Y_LIMIT*2, delta_angle/2/np.pi]
+
+    # action [0,1]
     def apply_action(self, action, i):
-        # self.wolves[i].update(action[0]-0.5, (action[1]-0.5)*3)
-        self.wolves[i].update((action[0]-0.5)*2*WOLF_ACCEL_LIMIT, action[1]*2*np.pi)
+        self.wolves[i].update(action[0], action[1])
         
 
     def step(self):
         for sheep in self.sheeps:
-            magnitiude_accel_delta = random.random()-0.5
-            angle_accel_delta = (random.random()-0.5)*2
+            magnitiude_accel_delta = random.random()
+            angle_accel_delta = random.random()
             sheep.update(magnitiude_accel_delta, angle_accel_delta)
         self.ticks += 1
+
+# ------------ Sheep ------------
 
 class Sheep:
     def __init__(self):
@@ -116,7 +122,11 @@ class Sheep:
         self.magnitude_accel = 0.0
         self.angle_accel = 0.0
 
-    def update(self, magnitude_accel_delta, angle_accel_delta):
+    # valori fra magnitude_accel_delta [0,1] angle_accel_delta [0,1]
+    def update(self, magnitude_accel_delta, angle_accel_delta):       
+        magnitude_accel_delta = (magnitude_accel_delta*2-1)*SHEEP_MAGNITUDE_SCALING
+        angle_accel_delta = (angle_accel_delta*2-1)*SHEEP_ANGLE_SCALING
+
         self.magnitude_accel += magnitude_accel_delta
         if self.magnitude_accel > SHEEP_ACCEL_LIMIT:
             self.magnitude_accel = SHEEP_ACCEL_LIMIT
@@ -124,9 +134,9 @@ class Sheep:
             self.magnitude_accel = 0.0
 
         self.angle_accel += angle_accel_delta
-        if self.angle_accel > 2*np.pi:
+        if self.angle_accel > np.pi:
             self.angle_accel -= 2*np.pi
-        if self.angle_accel < 0:
+        if self.angle_accel < -np.pi:
             self.angle_accel += 2*np.pi
 
         x_accel = self.magnitude_accel * np.cos(self.angle_accel)
@@ -157,6 +167,8 @@ class Sheep:
         pygame.draw.line(screen, SHEEPS_COLOR, (int(self.x),int(self.y)),(int(self.x+self.x_speed),int(self.y+self.y_speed)))
 
 
+# ------------ Wolf ------------
+
 class Wolf:
     def __init__(self):
         self.x = random.randrange(0, X_LIMIT)
@@ -172,20 +184,21 @@ class Wolf:
         self.best = False
 
 
-    # def update(self, magnitude_accel_delta, angle_accel_delta):
-    def update(self, magnitude_accel, angle_accel):
-        # self.magnitude_accel += magnitude_accel_delta
-        self.magnitude_accel = magnitude_accel
+    # valori fra magnitude_accel_delta [0,1] angle_accel_delta [0,1]
+    def update(self, magnitude_accel_delta, angle_accel_delta):
+        magnitude_accel_delta = (magnitude_accel_delta*2-1)*WOLF_MAGNITUDE_SCALING
+        angle_accel_delta = (angle_accel_delta*2-1)*WOLF_ANGLE_SCALING
+
+        self.magnitude_accel += magnitude_accel_delta
         if self.magnitude_accel > WOLF_ACCEL_LIMIT:
             self.magnitude_accel = WOLF_ACCEL_LIMIT
         if self.magnitude_accel < 0.0:
             self.magnitude_accel = 0.0
 
-        # self.angle_accel += angle_accel_delta
-        self.angle_accel = angle_accel
-        if self.angle_accel > 2*np.pi:
+        self.angle_accel += angle_accel_delta
+        if self.angle_accel > np.pi:
             self.angle_accel -= 2*np.pi
-        if self.angle_accel < 0:
+        if self.angle_accel < -np.pi:
             self.angle_accel += 2*np.pi
 
         x_accel = self.magnitude_accel * np.cos(self.angle_accel)
@@ -232,7 +245,7 @@ def main():
     pygame.font.init()
     myfont = pygame.font.SysFont('Comic Sans MS', 20)
 
-    local_game = Game(30)
+    local_game = Game(30, screen, MAX_SHEEPS)
     
     try:
         while 1:
