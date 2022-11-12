@@ -25,8 +25,8 @@ WOLF_ACCEL_LIMIT = 2.0
 WOLF_MAGNITUDE_SCALING = 0.5
 WOLF_ANGLE_SCALING = 0.5
 
-SHEEP_SPEED_LIMIT = 6.0
-SHEEP_ACCEL_LIMIT = 3.0
+SHEEP_SPEED_LIMIT = 7.0
+SHEEP_ACCEL_LIMIT = 2.0
 SHEEP_MAGNITUDE_SCALING = 0.5
 SHEEP_ANGLE_SCALING = 0.5
 
@@ -84,7 +84,7 @@ class Game(object):
                 delta_angle = np.arccos(np.dot(direction_vector,wolf_vector)/(np.linalg.norm(direction_vector)*np.linalg.norm(wolf_vector)))
                 min_sheep = sheep
         if min_magnitude < MAGNITUDE_THRESHOLD and (delta_angle < SPEED_DELTA_ANGLE_THRESHOLD or delta_angle > np.pi*2-SPEED_DELTA_ANGLE_THRESHOLD):
-            self.wolves[i].energy += 10
+            self.wolves[i].energy += 100
             if self.wolves[i].energy > self.wolves[self.prev_best].energy:
                 self.wolves[self.prev_best].best = False
                 self.wolves[i].best = True

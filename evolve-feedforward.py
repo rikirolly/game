@@ -7,6 +7,7 @@ from __future__ import print_function
 import os
 import pickle
 
+
 import game
 
 import neat
@@ -31,7 +32,7 @@ pygame.font.init()
 myfont = pygame.font.SysFont('Comic Sans MS', 12)
 
 slow_motion = False
-num_sheeps = 10
+num_sheeps = 1
 
 
 def eval_genomes(genomes, config):
@@ -109,7 +110,6 @@ def eval_genomes(genomes, config):
 
             pygame.display.update()
 
-
 def run():
 
     # Load the config file, which is assumed to live in
@@ -121,7 +121,11 @@ def run():
                          neat.DefaultSpeciesSet, neat.DefaultStagnation,
                          config_path)
 
-    pop = neat.Population(config)
+    checkpointer = neat.Checkpointer(5)
+    # pop = checkpointer.restore_checkpoint("neat-checkpoint-394-recurrent")
+    pop = checkpointer.restore_checkpoint("neat-checkpoint-999-feedforward")
+
+    # pop = neat.Population(config)
 
     # Add a stdout reporter to show progress in the terminal.
     pop.add_reporter(neat.StdOutReporter(True))
