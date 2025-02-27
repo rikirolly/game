@@ -51,13 +51,12 @@ BUFFER_SIZE = 10000
 # Training settings
 NUM_EPISODES = 5000
 SAVE_INTERVAL = 50
-EVAL_INTERVAL = 50
+EVAL_INTERVAL = 1
 RENDER_TRAINING = False
-EVAL_EPISODES = 5
 
 # Checkpoint settings
 # Set to None to start from scratch, or specify a path like "ppo_models/model_500.pth" to resume
-CHECKPOINT_PATH = 'ppo_models/model_550.pth'
+CHECKPOINT_PATH = None
 
 # Evaluation only mode - set to True to only evaluate a saved model without training
 EVAL_ONLY = False
@@ -379,22 +378,26 @@ class ActorCritic(nn.Module):
         # Shared network layers
         self.shared = nn.Sequential(
             nn.Linear(state_dim, 64),
-            nn.Tanh(),
+            nn.ReLU(),  # ReLU invece di Tanh per ridurre la saturazione
             nn.Linear(64, 64),
-            nn.Tanh()
+            nn.ReLU()   # ReLU invece di Tanh
         )
         
         # Policy network (Actor)
         self.actor_mean = nn.Linear(64, action_dim)
         
+        # Inizializzazione con pesi più piccoli per ridurre la saturazione iniziale
+        nn.init.xavier_uniform_(self.actor_mean.weight, gain=0.01)
+        nn.init.constant_(self.actor_mean.bias, 0.0)
+        
         # Initialize with higher log_std for more exploration initially
-        initial_log_std = np.log(0.5)  # Higher initial std dev
+        initial_log_std = np.log(1.0)  # Aumentato da 0.5 a 1.0 per maggiore esplorazione
         self.actor_log_std = nn.Parameter(torch.ones(action_dim) * initial_log_std)
         
         # Value network (Critic)
         self.critic = nn.Sequential(
             nn.Linear(64, 64),
-            nn.Tanh(),
+            nn.ReLU(),  # ReLU invece di Tanh
             nn.Linear(64, 1)
         )
         
@@ -451,10 +454,14 @@ class PPOAgent:
         self.avg_length = []
         
         # Initialize entropy coefficient with a higher value
-        self.entropy_coef = ENTROPY_COEF * 5.0  # Start with 5x the base entropy
+        self.entropy_coef = ENTROPY_COEF * 10.0  # Aumentato da 5x a 10x per maggiore esplorazione iniziale
         self.min_entropy_coef = ENTROPY_COEF    # Target minimum entropy
-        self.entropy_decay = 0.995              # Decay rate per update
+        self.entropy_decay = 0.998              # Decadimento più lento (era 0.995)
         self.updates_count = 0                  # Track number of updates
+        
+        # Noise per aumentare l'esplorazione iniziale
+        self.action_noise = 0.3  # Rumore iniziale per le azioni
+        self.noise_decay = 0.998  # Tasso di decadimento del rumore
         
     def reset_buffers(self):
         self.states = []
@@ -473,7 +480,23 @@ class PPOAgent:
         self.dones.append(done)
         
     def get_action(self, state, deterministic=False):
-        return self.policy.get_action(state, deterministic)
+        if deterministic:
+            return self.policy.get_action(state, deterministic=True)
+        else:
+            # Ottieni azione dalla policy
+            action = self.policy.get_action(state, deterministic=False)
+            
+            # Aggiungi rumore decrescente per aumentare l'esplorazione
+            # Il rumore diminuisce nel tempo con gli aggiornamenti
+            if self.updates_count < 50:  # Solo nelle prime fasi dell'addestramento
+                current_noise = self.action_noise * (self.noise_decay ** self.updates_count)
+                noise = np.random.normal(0, current_noise, size=self.action_dim)
+                action = action + noise
+                
+                # Limita l'azione nell'intervallo [-1, 1]
+                action = np.clip(action, -1.0, 1.0)
+                
+            return action
         
     def compute_gae(self, next_value):
         # Convert to numpy arrays for easier computation
@@ -561,11 +584,20 @@ class PPOAgent:
                 
                 # Compute losses
                 policy_loss = -torch.min(surr1, surr2).mean()
+                
+                # Reshape returns to match the shape of values (fixing the broadcasting warning)
+                mb_returns = mb_returns.view(-1, 1)
                 value_loss = nn.MSELoss()(values, mb_returns)
+                
                 entropy_loss = -entropy.mean()
                 
                 # Use decaying entropy coefficient
                 current_entropy_coef = self.entropy_coef
+                
+                # Aumentiamo il peso dell'entropia nelle prime fasi per favorire l'esplorazione
+                if self.updates_count < 100:
+                    exploration_bonus = max(0, 100 - self.updates_count) / 100.0
+                    current_entropy_coef *= (1.0 + exploration_bonus)
                 
                 # Total loss
                 loss = policy_loss + VALUE_COEF * value_loss - current_entropy_coef * entropy_loss
@@ -579,7 +611,7 @@ class PPOAgent:
                 
         # Print current entropy coefficient every 10 updates
         if self.updates_count % 10 == 0:
-            print(f"Current entropy coefficient: {self.entropy_coef:.5f}")
+            print(f"Current entropy coefficient: {self.entropy_coef:.5f}, Noise level: {self.action_noise * (self.noise_decay ** self.updates_count):.5f}")
             
         # Reset buffers after update
         self.reset_buffers()
@@ -590,7 +622,9 @@ class PPOAgent:
             'model_state_dict': self.policy.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'entropy_coef': self.entropy_coef,
-            'updates_count': self.updates_count
+            'updates_count': self.updates_count,
+            'action_noise': self.action_noise,
+            'noise_decay': self.noise_decay
         }
         
         # Add any additional kwargs to the checkpoint
@@ -614,6 +648,10 @@ class PPOAgent:
                     self.entropy_coef = checkpoint['entropy_coef']
                 if 'updates_count' in checkpoint:
                     self.updates_count = checkpoint['updates_count']
+                if 'action_noise' in checkpoint:
+                    self.action_noise = checkpoint['action_noise']
+                if 'noise_decay' in checkpoint:
+                    self.noise_decay = checkpoint['noise_decay']
                     
                 return checkpoint  # Return full checkpoint for other parameters
             else:
