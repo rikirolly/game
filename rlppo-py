@@ -48,6 +48,20 @@ MAX_GRAD_NORM = 0.5
 NUM_STEPS = 2048  # Steps per update
 BUFFER_SIZE = 10000
 
+# Training settings
+NUM_EPISODES = 5000
+SAVE_INTERVAL = 50
+EVAL_INTERVAL = 50
+RENDER_TRAINING = False
+EVAL_EPISODES = 5
+
+# Checkpoint settings
+# Set to None to start from scratch, or specify a path like "ppo_models/model_500.pth" to resume
+CHECKPOINT_PATH = 'ppo_models/model_550.pth'
+
+# Evaluation only mode - set to True to only evaluate a saved model without training
+EVAL_ONLY = False
+
 # Initialize PyGame
 pygame.init()
 screen = pygame.display.set_mode((X_LIMIT, Y_LIMIT))
@@ -570,15 +584,51 @@ class PPOAgent:
         # Reset buffers after update
         self.reset_buffers()
         
-    def save(self, filename):
-        torch.save(self.policy.state_dict(), filename)
+    def save(self, filename, **kwargs):
+        """Save model with additional information"""
+        checkpoint = {
+            'model_state_dict': self.policy.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'entropy_coef': self.entropy_coef,
+            'updates_count': self.updates_count
+        }
         
-    def load(self, filename):
-        self.policy.load_state_dict(torch.load(filename))
+        # Add any additional kwargs to the checkpoint
+        for key, value in kwargs.items():
+            checkpoint[key] = value
+            
+        torch.save(checkpoint, filename)
+        
+    def load(self, checkpoint_path):
+        """Load model and training state from checkpoint"""
+        try:
+            checkpoint = torch.load(checkpoint_path)
+            
+            # Check if it's a new-style checkpoint with state_dict or just the state_dict directly
+            if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+                self.policy.load_state_dict(checkpoint['model_state_dict'])
+                self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                
+                # Restore other training parameters if available
+                if 'entropy_coef' in checkpoint:
+                    self.entropy_coef = checkpoint['entropy_coef']
+                if 'updates_count' in checkpoint:
+                    self.updates_count = checkpoint['updates_count']
+                    
+                return checkpoint  # Return full checkpoint for other parameters
+            else:
+                # Legacy loading for old models
+                self.policy.load_state_dict(checkpoint)
+                return {}  # Return empty dict for legacy models
+                
+        except Exception as e:
+            print(f"Error loading checkpoint: {e}")
+            return {}
 
 
 # Training function
-def train_ppo(num_episodes=1000, save_interval=100, eval_interval=100, render_training=False):
+def train_ppo(num_episodes=NUM_EPISODES, save_interval=SAVE_INTERVAL, eval_interval=EVAL_INTERVAL, 
+            render_training=RENDER_TRAINING, checkpoint_path=CHECKPOINT_PATH):
     # Create environment with rendering disabled for faster training
     env = WolfSheepEnv(num_sheeps=NUM_SHEEPS, render_mode=None)
     state_dim = env.observation_space.shape[0]
@@ -586,15 +636,42 @@ def train_ppo(num_episodes=1000, save_interval=100, eval_interval=100, render_tr
     
     agent = PPOAgent(state_dim, action_dim)
     
+    # Load from checkpoint if specified
+    start_episode = 1
+    best_mean_reward = -float('inf')
+    episode_rewards = []
+    
+    if checkpoint_path:
+        print(f"Loading model from checkpoint: {checkpoint_path}")
+        checkpoint = agent.load(checkpoint_path)
+        
+        if 'episode' in checkpoint:
+            start_episode = checkpoint['episode'] + 1
+            print(f"Resuming training from episode {start_episode}")
+        
+        if 'best_mean_reward' in checkpoint:
+            best_mean_reward = checkpoint['best_mean_reward']
+            print(f"Previous best mean reward: {best_mean_reward:.2f}")
+        
+        if 'episode_rewards' in checkpoint:
+            episode_rewards = checkpoint['episode_rewards']
+            print(f"Loaded {len(episode_rewards)} previous episode rewards")
+            
+        print(f"Entropy coefficient: {agent.entropy_coef:.5f}")
+        print(f"Updates count: {agent.updates_count}")
+        print("Checkpoint loaded successfully!")
+    
     # Create directory for saving models
     os.makedirs("ppo_models", exist_ok=True)
     
     # For statistics
-    episode_rewards = []
     mean_rewards = deque(maxlen=100)
-    best_mean_reward = -float('inf')
+    if len(episode_rewards) > 0:
+        # Initialize mean_rewards with the last rewards (up to 100)
+        for r in episode_rewards[-100:]:
+            mean_rewards.append(r)
     
-    for episode in range(1, num_episodes + 1):
+    for episode in range(start_episode, num_episodes + 1):
         state, _ = env.reset()
         episode_reward = 0
         done = False
@@ -636,11 +713,22 @@ def train_ppo(num_episodes=1000, save_interval=100, eval_interval=100, render_tr
         # Save best model
         if mean_reward > best_mean_reward and episode > 100:
             best_mean_reward = mean_reward
-            agent.save(f"ppo_models/best_model.pth")
+            
+            # Save as full checkpoint
+            agent.save("ppo_models/best_model.pth", 
+                      episode=episode, 
+                      best_mean_reward=best_mean_reward,
+                      episode_rewards=episode_rewards)
+            
+            print(f"New best model saved with mean reward: {best_mean_reward:.2f}")
         
         # Save model periodically
         if episode % save_interval == 0:
-            agent.save(f"ppo_models/model_{episode}.pth")
+            # Save as full checkpoint
+            agent.save(f"ppo_models/model_{episode}.pth",
+                      episode=episode,
+                      best_mean_reward=best_mean_reward,
+                      episode_rewards=episode_rewards)
             
             # Plot and save rewards
             plt.figure(figsize=(10, 5))
@@ -741,7 +829,7 @@ def evaluate_ppo(model_path, num_episodes=10, render=True):
 
 if __name__ == "__main__":
     # Train a PPO agent with evaluation every 100 episodes, but without rendering during training
-    agent = train_ppo(num_episodes=5000, save_interval=50, eval_interval=50, render_training=False)
+    agent = train_ppo(num_episodes=NUM_EPISODES, save_interval=SAVE_INTERVAL, eval_interval=EVAL_INTERVAL, render_training=RENDER_TRAINING, checkpoint_path=CHECKPOINT_PATH)
     
     # Final evaluation of the best model
     print("\n--- Final Evaluation of Best Model ---")
