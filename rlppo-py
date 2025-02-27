@@ -38,6 +38,8 @@ NUM_SHEEPS = 1
 # Costante per la normalizzazione della distanza toroidale (massima distanza)
 MAX_TOROIDAL_DISTANCE = np.sqrt((X_LIMIT/2)**2 + (Y_LIMIT/2)**2)
 
+DISTANCE_PENALTY_COEF = 0.05       # Coefficiente di penalizzazione
+
 # Hyperparameters
 LEARNING_RATE = 3e-4
 GAMMA = 0.99
@@ -201,19 +203,19 @@ class WolfSheepEnv(gym.Env):
         super().__init__()
         self.num_sheeps = num_sheeps
         self.render_mode = render_mode
-        
-        # Aggiunta: definizione dello spazio delle azioni
+
+        # Definizione dello spazio delle azioni
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
-        
-        # Espandiamo lo spazio di osservazione per includere informazioni sulle 3 pecore più vicine
+
+        # Espansione dello spazio di osservazione per includere le informazioni sulle 3 pecore più vicine
         self.NUM_NEAREST_SHEEPS = 3
         obs_dim = 2 + self.NUM_NEAREST_SHEEPS * 3
         self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(obs_dim,), dtype=np.float32)
-        
+
         self.wolf = Wolf()
         self.sheeps = []
         self.reset()
-        
+
         self.steps = 0
         self.max_steps = 1000
 
@@ -269,11 +271,28 @@ class WolfSheepEnv(gym.Env):
 
     def step(self, action):
         self.steps += 1
+
+        # Salva la posizione del lupo prima dell'aggiornamento
+        old_x, old_y = self.wolf.x, self.wolf.y
+
+        # Aggiorna il lupo e le pecore
         self.wolf.update(action[0], action[1])
         for sheep in self.sheeps:
             sheep.update(random.random(), random.random())
 
-        # Calcoliamo la distanza della pecora più vicina (per ricompensa e catching)
+        # Calcola la distanza percorsa (tenendo conto dell'effetto toroidale)
+        dx = abs(self.wolf.x - old_x)
+        if dx > X_LIMIT / 2:
+            dx = X_LIMIT - dx
+        dy = abs(self.wolf.y - old_y)
+        if dy > Y_LIMIT / 2:
+            dy = Y_LIMIT - dy
+        displacement = np.sqrt(dx**2 + dy**2)
+
+        # Penalità direttamente proporzionale alla distanza percorsa
+        distance_penalty = DISTANCE_PENALTY_COEF * displacement
+
+        # Calcola il reward basato sulla vicinanza con le pecore
         min_magnitude = BIG_NUMBER
         closest_sheep = None
         for sheep in self.sheeps:
@@ -295,10 +314,9 @@ class WolfSheepEnv(gym.Env):
                 closest_sheep = sheep
 
         reward = -0.01
-        proximity_reward = 1.0 / (1.0 + min_magnitude/50)
+        proximity_reward = 1.0 / (1.0 + min_magnitude / 50)
         reward += proximity_reward * 0.5
 
-        # Se il lupo è sufficientemente vicino, si considera la cattura
         if min_magnitude < MAGNITUDE_THRESHOLD:
             reward += 10.0
             if closest_sheep:
@@ -311,11 +329,15 @@ class WolfSheepEnv(gym.Env):
             speed_limit_penalty = (proximity_to_limit ** 2) * 0.1
         reward -= speed_limit_penalty
 
+        # Sottrai la penalità proporzionale alla distanza percorsa
+        reward -= distance_penalty
+
         done = self.steps >= self.max_steps
         return self._get_obs(), reward, done, False, {
-            "magnitude": min_magnitude, 
+            "magnitude": min_magnitude,
             "wolf_speed": wolf_speed,
-            "speed_limit_penalty": speed_limit_penalty
+            "speed_limit_penalty": speed_limit_penalty,
+            "distance_penalty": distance_penalty
         }
 
     def render(self):
