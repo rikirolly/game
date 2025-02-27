@@ -14,12 +14,12 @@ from collections import deque
 # Constants
 X_LIMIT = 800
 Y_LIMIT = 800
-WOLF_SPEED_LIMIT = 10.0
-WOLF_ACCEL_LIMIT = 3.0
+WOLF_SPEED_LIMIT = 10.0         # Soglia aggiornata per la velocità del lupo
+WOLF_ACCEL_LIMIT = 3.0          # Soglia aggiornata per l'accelerazione del lupo
 WOLF_MAGNITUDE_SCALING = 0.5
 WOLF_ANGLE_SCALING = 0.5
-SHEEP_SPEED_LIMIT = 7.0
-SHEEP_ACCEL_LIMIT = 2.0
+SHEEP_SPEED_LIMIT = 1.0
+SHEEP_ACCEL_LIMIT = 1.0
 SHEEP_MAGNITUDE_SCALING = 0.5
 SHEEP_ANGLE_SCALING = 0.5
 WOLF_INITIAL_ENERGY = 1000
@@ -33,7 +33,10 @@ BACKGROUND_COLOR = (125, 125, 125)
 WOLVES_COLOR = (0, 0, 0)
 SHEEPS_COLOR = (255, 255, 255)
 
-NUM_SHEEPS = 50
+NUM_SHEEPS = 1
+
+# Costante per la normalizzazione della distanza toroidale (massima distanza)
+MAX_TOROIDAL_DISTANCE = np.sqrt((X_LIMIT/2)**2 + (Y_LIMIT/2)**2)
 
 # Hyperparameters
 LEARNING_RATE = 3e-4
@@ -51,15 +54,14 @@ BUFFER_SIZE = 10000
 # Training settings
 NUM_EPISODES = 5000
 SAVE_INTERVAL = 50
-EVAL_INTERVAL = 50
+EVAL_INTERVAL = 1
 RENDER_TRAINING = False
 EVAL_EPISODES = 5
 
 # Checkpoint settings
-# Set to None to start from scratch, or specify a path like "ppo_models/model_500.pth" to resume
 CHECKPOINT_PATH = None
 
-# Evaluation only mode - set to True to only evaluate a saved model without training
+# Evaluation only mode
 EVAL_ONLY = False
 
 # Initialize PyGame
@@ -76,20 +78,17 @@ class Sheep:
     def reset(self):
         self.x = random.randrange(0, X_LIMIT)
         self.y = random.randrange(0, Y_LIMIT)
-        self.x_speed = random.random()*SHEEP_SPEED_LIMIT
-        self.y_speed = random.random()*SHEEP_SPEED_LIMIT
+        self.x_speed = random.random() * SHEEP_SPEED_LIMIT
+        self.y_speed = random.random() * SHEEP_SPEED_LIMIT
         self.magnitude_accel = 0.0
         self.angle_accel = 0.0
 
     def update(self, magnitude_accel_delta, angle_accel_delta):
-        magnitude_accel_delta = (magnitude_accel_delta*2-1)*SHEEP_MAGNITUDE_SCALING
-        angle_accel_delta = (angle_accel_delta*2-1)*SHEEP_ANGLE_SCALING
+        magnitude_accel_delta = (magnitude_accel_delta * 2 - 1) * SHEEP_MAGNITUDE_SCALING
+        angle_accel_delta = (angle_accel_delta * 2 - 1) * SHEEP_ANGLE_SCALING
 
         self.magnitude_accel += magnitude_accel_delta
-        if self.magnitude_accel > SHEEP_ACCEL_LIMIT:
-            self.magnitude_accel = SHEEP_ACCEL_LIMIT
-        if self.magnitude_accel < 0.0:
-            self.magnitude_accel = 0.0
+        self.magnitude_accel = np.clip(self.magnitude_accel, 0.0, SHEEP_ACCEL_LIMIT)
 
         self.angle_accel += angle_accel_delta
         if self.angle_accel > np.pi:
@@ -112,25 +111,26 @@ class Sheep:
         if self.x > X_LIMIT:
             self.x = 0
         if self.x < 0:
-            self.x = X_LIMIT-1
-        
+            self.x = X_LIMIT - 1
+
         self.y += self.y_speed
         if self.y > Y_LIMIT:
             self.y = 0
         if self.y < 0:
-            self.y = Y_LIMIT-1
+            self.y = Y_LIMIT - 1
 
     def draw(self, screen):
-        pygame.draw.circle(screen, SHEEPS_COLOR, (int(self.x),int(self.y)), SHEEPS_RADIUS)
-        pygame.draw.line(screen, SHEEPS_COLOR, (int(self.x),int(self.y)),(int(self.x+self.x_speed),int(self.y+self.y_speed)))
+        pygame.draw.circle(screen, SHEEPS_COLOR, (int(self.x), int(self.y)), SHEEPS_RADIUS)
+        pygame.draw.line(screen, SHEEPS_COLOR, (int(self.x), int(self.y)),
+                         (int(self.x + self.x_speed), int(self.y + self.y_speed)))
 
 
 class Wolf:
     def __init__(self, id=0):
         self.x = random.randrange(0, X_LIMIT)
         self.y = random.randrange(0, Y_LIMIT)
-        self.x_speed = random.random()*WOLF_SPEED_LIMIT
-        self.y_speed = random.random()*WOLF_SPEED_LIMIT
+        self.x_speed = random.random() * WOLF_SPEED_LIMIT
+        self.y_speed = random.random() * WOLF_SPEED_LIMIT
         self.magnitude_accel = 0.0
         self.angle_accel = 0.0
         self.x_direction = self.x_speed
@@ -140,22 +140,18 @@ class Wolf:
         self.best = False
 
     def update(self, magnitude_accel_delta, angle_accel_delta):
-        # Applica una funzione di scala non lineare per evitare di raggiungere i limiti di accelerazione
-        # Questa parte assicura che sia più difficile saturare l'accelerazione
+        # Scala in modo non lineare per evitare saturazione
         magnitude_accel_delta = np.tanh(magnitude_accel_delta * 0.8) * 0.95
         angle_accel_delta = np.tanh(angle_accel_delta * 0.8) * 0.95
-        
+
         magnitude_accel_delta = np.clip(magnitude_accel_delta, -1, 1)
         angle_accel_delta = np.clip(angle_accel_delta, -1, 1)
-        
-        magnitude_accel_delta = magnitude_accel_delta * WOLF_MAGNITUDE_SCALING
-        angle_accel_delta = angle_accel_delta * WOLF_ANGLE_SCALING
+
+        magnitude_accel_delta *= WOLF_MAGNITUDE_SCALING
+        angle_accel_delta *= WOLF_ANGLE_SCALING
 
         self.magnitude_accel += magnitude_accel_delta
-        if self.magnitude_accel > WOLF_ACCEL_LIMIT:
-            self.magnitude_accel = WOLF_ACCEL_LIMIT
-        if self.magnitude_accel < 0.0:
-            self.magnitude_accel = 0.0
+        self.magnitude_accel = np.clip(self.magnitude_accel, 0.0, WOLF_ACCEL_LIMIT)
 
         self.angle_accel += angle_accel_delta
         if self.angle_accel > np.pi:
@@ -170,9 +166,7 @@ class Wolf:
         self.y_speed += y_accel
 
         magnitude_speed = np.sqrt(self.x_speed**2 + self.y_speed**2)
-        
-        # Aggiungiamo una penalità progressiva quando ci avviciniamo al limite di velocità
-        # invece di un taglio netto
+        # Penalità progressiva vicino al limite di velocità
         if magnitude_speed > WOLF_SPEED_LIMIT * 0.8:
             scaling_factor = 1.0 - 0.5 * ((magnitude_speed - WOLF_SPEED_LIMIT * 0.8) / (WOLF_SPEED_LIMIT * 0.2))
             scaling_factor = max(scaling_factor, WOLF_SPEED_LIMIT / magnitude_speed)
@@ -181,27 +175,25 @@ class Wolf:
 
         if self.x_speed != 0.0 or self.y_speed != 0.0:
             self.x_direction = self.x_speed
-            self.y_direction = self.y_speed 
+            self.y_direction = self.y_speed
 
         self.x += self.x_speed
         if self.x > X_LIMIT:
             self.x = 0
         if self.x < 0:
-            self.x = X_LIMIT-1
-        
+            self.x = X_LIMIT - 1
+
         self.y += self.y_speed
         if self.y > Y_LIMIT:
             self.y = 0
         if self.y < 0:
-            self.y = Y_LIMIT-1
+            self.y = Y_LIMIT - 1
 
     def draw(self, screen):
-        if self.best:
-            color = (255, 255, 0)
-        else:
-            color = WOLVES_COLOR
+        color = (255, 255, 0) if self.best else WOLVES_COLOR
         pygame.draw.circle(screen, color, (int(self.x), int(self.y)), WOLVES_RADIUS)
-        pygame.draw.line(screen, color, (int(self.x), int(self.y)), (int(self.x+self.x_speed), int(self.y+self.y_speed)))
+        pygame.draw.line(screen, color, (int(self.x), int(self.y)),
+                         (int(self.x + self.x_speed), int(self.y + self.y_speed)))
 
 
 class WolfSheepEnv(gym.Env):
@@ -210,16 +202,13 @@ class WolfSheepEnv(gym.Env):
         self.num_sheeps = num_sheeps
         self.render_mode = render_mode
         
-        # Define action and observation space
-        # Actions: continuous values for magnitude_accel_delta and angle_accel_delta
-        self.action_space = spaces.Box(
-            low=-1.0, high=1.0, shape=(2,), dtype=np.float32
-        )
+        # Aggiunta: definizione dello spazio delle azioni
+        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
         
-        # Observations: relative positions, angle, e velocità/accelerazione correnti
-        self.observation_space = spaces.Box(
-            low=-1.0, high=1.0, shape=(5,), dtype=np.float32
-        )
+        # Espandiamo lo spazio di osservazione per includere informazioni sulle 3 pecore più vicine
+        self.NUM_NEAREST_SHEEPS = 3
+        obs_dim = 2 + self.NUM_NEAREST_SHEEPS * 3
+        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(obs_dim,), dtype=np.float32)
         
         self.wolf = Wolf()
         self.sheeps = []
@@ -227,250 +216,171 @@ class WolfSheepEnv(gym.Env):
         
         self.steps = 0
         self.max_steps = 1000
-        
+
     def reset(self, seed=None):
         super().reset(seed=seed)
         self.steps = 0
         self.wolf = Wolf()
-        self.sheeps = []
-        for _ in range(self.num_sheeps):
-            self.sheeps.append(Sheep())
+        self.sheeps = [Sheep() for _ in range(self.num_sheeps)]
         return self._get_obs(), {}
-    
+
     def _get_obs(self):
-        """Get the observation (state) for the wolf agent"""
-        min_magnitude = BIG_NUMBER
-        min_delta_x = 0
-        min_delta_y = 0
-        delta_angle = 0
-        
+        """Costruisce l'osservazione per il lupo includendo informazioni su più pecore vicine."""
+        # Informazioni sullo stato del lupo
+        wolf_speed = np.linalg.norm([self.wolf.x_speed, self.wolf.y_speed])
+        wolf_speed_normalized = wolf_speed / WOLF_SPEED_LIMIT
+        wolf_accel_normalized = self.wolf.magnitude_accel / WOLF_ACCEL_LIMIT
+
+        # Calcoliamo per ogni pecora la distanza toroidale e le differenze (delta_x, delta_y)
+        sheep_infos = []
         for sheep in self.sheeps:
             delta_x = sheep.x - self.wolf.x
-            if delta_x > X_LIMIT/2:  # Toroidal distance
+            if delta_x > X_LIMIT/2:
                 delta_x -= X_LIMIT
             if delta_x < -X_LIMIT/2:
                 delta_x += X_LIMIT
-                
+
             delta_y = sheep.y - self.wolf.y
-            if delta_y > Y_LIMIT/2:  # Toroidal distance
+            if delta_y > Y_LIMIT/2:
                 delta_y -= Y_LIMIT
             if delta_y < -Y_LIMIT/2:
                 delta_y += Y_LIMIT
-                
-            magnitude = np.linalg.norm([delta_x, delta_y])
-            
-            if magnitude < min_magnitude:
-                min_delta_x = delta_x
-                min_delta_y = delta_y
-                min_magnitude = magnitude
-                
-                # Calculate angle between wolf's velocity and direction to sheep
-                if np.linalg.norm([self.wolf.x_speed, self.wolf.y_speed]) > 0 and magnitude > 0:
-                    direction_vector = np.array([min_delta_x, min_delta_y])
-                    wolf_vector = np.array([self.wolf.x_speed, self.wolf.y_speed])
-                    
-                    cos_angle = np.dot(direction_vector, wolf_vector) / (np.linalg.norm(direction_vector) * np.linalg.norm(wolf_vector))
-                    cos_angle = np.clip(cos_angle, -1.0, 1.0)  # Ensure within valid range
-                    delta_angle = np.arccos(cos_angle)
-                else:
-                    delta_angle = 0
-        
-        # Aggiungiamo informazioni sulla velocità attuale del lupo rispetto ai limiti
-        # Questo aiuta il modello a capire quanto è vicino ai limiti
-        wolf_speed = np.linalg.norm([self.wolf.x_speed, self.wolf.y_speed])
-        wolf_speed_normalized = wolf_speed / WOLF_SPEED_LIMIT  # Normalizzato rispetto al limite
-        
-        # Normalize observations
-        normalized_obs = np.array([
-            min_delta_x / (X_LIMIT/2),     # Normalize to [-1, 1]
-            min_delta_y / (Y_LIMIT/2),     # Normalize to [-1, 1]
-            delta_angle / np.pi,           # Normalize to [0, 1]
-            wolf_speed_normalized,         # Velocità attuale normalizzata [0, 1]
-            self.wolf.magnitude_accel / WOLF_ACCEL_LIMIT  # Accelerazione attuale normalizzata [0, 1]
-        ], dtype=np.float32)
-        
-        return normalized_obs
-    
+
+            distance = np.linalg.norm([delta_x, delta_y])
+            normalized_delta_x = delta_x / (X_LIMIT/2)
+            normalized_delta_y = delta_y / (Y_LIMIT/2)
+            normalized_distance = distance / MAX_TOROIDAL_DISTANCE
+
+            sheep_infos.append((distance, normalized_delta_x, normalized_delta_y, normalized_distance))
+
+        # Ordiniamo le pecore per distanza crescente
+        sheep_infos.sort(key=lambda x: x[0])
+        nearest = sheep_infos[:self.NUM_NEAREST_SHEEPS]
+
+        # Se non ci sono abbastanza pecore, pad con zeri
+        while len(nearest) < self.NUM_NEAREST_SHEEPS:
+            nearest.append((0.0, 0.0, 0.0, 0.0))
+
+        obs = [wolf_speed_normalized, wolf_accel_normalized]
+        for _, ndx, ndy, ndist in nearest:
+            obs.extend([ndx, ndy, ndist])
+
+        return np.array(obs, dtype=np.float32)
+
     def step(self, action):
-        """Execute one time step within the environment"""
         self.steps += 1
-        
-        # Apply action to wolf
         self.wolf.update(action[0], action[1])
-        
-        # Move sheeps randomly
         for sheep in self.sheeps:
             sheep.update(random.random(), random.random())
-        
-        # Calculate reward
+
+        # Calcoliamo la distanza della pecora più vicina (per ricompensa e catching)
         min_magnitude = BIG_NUMBER
-        min_delta_x = 0
-        min_delta_y = 0
-        delta_angle = 0
-        caught_sheep = None
-        
+        closest_sheep = None
         for sheep in self.sheeps:
             delta_x = sheep.x - self.wolf.x
-            if delta_x > X_LIMIT/2:  # Toroidal distance
+            if delta_x > X_LIMIT/2:
                 delta_x -= X_LIMIT
             if delta_x < -X_LIMIT/2:
                 delta_x += X_LIMIT
-                
+
             delta_y = sheep.y - self.wolf.y
-            if delta_y > Y_LIMIT/2:  # Toroidal distance
+            if delta_y > Y_LIMIT/2:
                 delta_y -= Y_LIMIT
             if delta_y < -Y_LIMIT/2:
                 delta_y += Y_LIMIT
-                
+
             magnitude = np.linalg.norm([delta_x, delta_y])
-            
             if magnitude < min_magnitude:
-                min_delta_x = delta_x
-                min_delta_y = delta_y
                 min_magnitude = magnitude
-                
-                # Calculate angle between wolf's velocity and direction to sheep
-                if np.linalg.norm([self.wolf.x_speed, self.wolf.y_speed]) > 0 and magnitude > 0:
-                    direction_vector = np.array([delta_x, delta_y])
-                    wolf_vector = np.array([self.wolf.x_speed, self.wolf.y_speed])
-                    
-                    cos_angle = np.dot(direction_vector, wolf_vector) / (np.linalg.norm(direction_vector) * np.linalg.norm(wolf_vector))
-                    cos_angle = np.clip(cos_angle, -1.0, 1.0)
-                    delta_angle = np.arccos(cos_angle)
-                else:
-                    delta_angle = 0
-                    
-                caught_sheep = sheep
-        
-        # Default reward: small negative to encourage quick catching
+                closest_sheep = sheep
+
         reward = -0.01
-        
-        # Add proximity reward (inversely proportional to distance)
-        # Scale the proximity reward based on how close the wolf is to the sheep
-        proximity_reward = 1.0 / (1.0 + min_magnitude/50) 
-        reward += proximity_reward * 0.5  # Increase the weight of proximity
-        
-        # Add angle alignment reward (higher when wolf is facing the sheep)
-        angle_alignment = 1.0 - min(delta_angle, 2*np.pi - delta_angle) / np.pi
-        reward += angle_alignment * 0.3
-        
-        # Check if wolf caught a sheep (must be facing it)
-        if min_magnitude < MAGNITUDE_THRESHOLD and (delta_angle < SPEED_DELTA_ANGLE_THRESHOLD or 
-                                                   delta_angle > 2*np.pi - SPEED_DELTA_ANGLE_THRESHOLD):
-            reward += 10.0  # Big reward for catching
-            caught_sheep.reset()  # Reset the caught sheep
-            
-        # Penalità per avvicinarsi troppo ai limiti di velocità e accelerazione
-        # Questa penalità incoraggia il lupo a mantenere un margine di sicurezza
+        proximity_reward = 1.0 / (1.0 + min_magnitude/50)
+        reward += proximity_reward * 0.5
+
+        # Se il lupo è sufficientemente vicino, si considera la cattura
+        if min_magnitude < MAGNITUDE_THRESHOLD:
+            reward += 10.0
+            if closest_sheep:
+                closest_sheep.reset()
+
         wolf_speed = np.linalg.norm([self.wolf.x_speed, self.wolf.y_speed])
         speed_limit_penalty = 0.0
-        
-        # Penalità progressiva che aumenta esponenzialmente avvicinandosi al limite
         if wolf_speed > WOLF_SPEED_LIMIT * 0.85:
-            # Calcola quanto siamo vicini al limite (da 0 a 1)
             proximity_to_limit = (wolf_speed - WOLF_SPEED_LIMIT * 0.85) / (WOLF_SPEED_LIMIT * 0.15)
-            # Penalità esponenziale che diventa significativa solo vicino al limite
-            speed_limit_penalty = proximity_to_limit ** 2 * 0.1
-            
+            speed_limit_penalty = (proximity_to_limit ** 2) * 0.1
         reward -= speed_limit_penalty
-            
-        # Check if episode is done
+
         done = self.steps >= self.max_steps
-        
-        # Return observation, reward, done, truncated, info
         return self._get_obs(), reward, done, False, {
             "magnitude": min_magnitude, 
-            "angle": delta_angle,
             "wolf_speed": wolf_speed,
             "speed_limit_penalty": speed_limit_penalty
         }
-    
+
     def render(self):
-        """Render the environment to the screen"""
         if self.render_mode is None:
             return
-        
+
         screen.fill(BACKGROUND_COLOR)
-        
-        # Draw wolf and sheep
         self.wolf.draw(screen)
         for sheep in self.sheeps:
             sheep.draw(screen)
-            
-        # Draw info
         text = myfont.render(f"Steps: {self.steps}", False, (0, 0, 0))
         screen.blit(text, (10, 10))
-        
         pygame.display.update()
 
 
-# PPO Actor-Critic Networks
+# PPO Actor-Critic Networks con architettura potenziata
 class ActorCritic(nn.Module):
     def __init__(self, state_dim, action_dim, device=None):
         super(ActorCritic, self).__init__()
-        
-        # Set device
         self.device = device if device is not None else torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        # Shared network layers
+        # Rete condivisa con 3 layer e 128 neuroni ciascuno
         self.shared = nn.Sequential(
-            nn.Linear(state_dim, 64),
-            nn.ReLU(),  # ReLU invece di Tanh per ridurre la saturazione
-            nn.Linear(64, 64),
-            nn.ReLU()   # ReLU invece di Tanh
+            nn.Linear(state_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU()
         )
         
-        # Policy network (Actor)
-        self.actor_mean = nn.Linear(64, action_dim)
-        
-        # Inizializzazione con pesi più piccoli per ridurre la saturazione iniziale
+        # Rete per la policy (Actor)
+        self.actor_mean = nn.Linear(128, action_dim)
         nn.init.xavier_uniform_(self.actor_mean.weight, gain=0.01)
         nn.init.constant_(self.actor_mean.bias, 0.0)
-        
-        # Initialize with higher log_std for more exploration initially
-        initial_log_std = np.log(1.0)  # Aumentato da 0.5 a 1.0 per maggiore esplorazione
+        initial_log_std = np.log(1.0)  # Esplorazione iniziale aumentata
         self.actor_log_std = nn.Parameter(torch.ones(action_dim) * initial_log_std)
         
-        # Value network (Critic)
+        # Rete per il valore (Critic) con un ulteriore layer
         self.critic = nn.Sequential(
-            nn.Linear(64, 64),
-            nn.ReLU(),  # ReLU invece di Tanh
-            nn.Linear(64, 1)
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 1)
         )
         
-        # Move model to the specified device
         self.to(self.device)
         
     def forward(self, state):
         shared_features = self.shared(state)
-        
-        # Actor: Get action distribution
         action_mean = self.actor_mean(shared_features)
         action_std = self.actor_log_std.exp()
         dist = Normal(action_mean, action_std)
-        
-        # Critic: Get state value
         value = self.critic(shared_features)
-        
         return dist, value
     
     def get_action(self, state, deterministic=False):
         state = torch.FloatTensor(state).unsqueeze(0).to(self.device)
         dist, _ = self.forward(state)
-        
-        if deterministic:
-            action = dist.mean
-        else:
-            action = dist.sample()
-            
+        action = dist.mean if deterministic else dist.sample()
         return action.squeeze().detach().cpu().numpy()
     
     def evaluate(self, states, actions):
         dist, values = self.forward(states)
-        
         action_log_probs = dist.log_prob(actions).sum(dim=1, keepdim=True)
         entropy = dist.entropy().sum(dim=1, keepdim=True)
-        
         return action_log_probs, values, entropy
 
 
@@ -483,22 +393,17 @@ class PPOAgent:
         self.policy = ActorCritic(state_dim, action_dim, device=self.device)
         self.optimizer = optim.Adam(self.policy.parameters(), lr=LEARNING_RATE)
         
-        # Initialize buffers
         self.reset_buffers()
-        
-        # For tracking statistics
         self.reward_history = []
         self.avg_length = []
         
-        # Initialize entropy coefficient with a higher value
-        self.entropy_coef = ENTROPY_COEF * 10.0  # Aumentato da 5x a 10x per maggiore esplorazione iniziale
-        self.min_entropy_coef = ENTROPY_COEF    # Target minimum entropy
-        self.entropy_decay = 0.998              # Decadimento più lento (era 0.995)
-        self.updates_count = 0                  # Track number of updates
+        self.entropy_coef = ENTROPY_COEF * 10.0  # Esplorazione iniziale potenziata
+        self.min_entropy_coef = ENTROPY_COEF
+        self.entropy_decay = 0.998
+        self.updates_count = 0
         
-        # Noise per aumentare l'esplorazione iniziale
-        self.action_noise = 0.3  # Rumore iniziale per le azioni
-        self.noise_decay = 0.998  # Tasso di decadimento del rumore
+        self.action_noise = 0.3
+        self.noise_decay = 0.998
         
     def reset_buffers(self):
         self.states = []
@@ -520,146 +425,91 @@ class PPOAgent:
         if deterministic:
             raw_action = self.policy.get_action(state, deterministic=True)
         else:
-            # Ottieni azione dalla policy
             raw_action = self.policy.get_action(state, deterministic=False)
-            
-            # Aggiungi rumore decrescente per aumentare l'esplorazione
-            # Il rumore diminuisce nel tempo con gli aggiornamenti
-            if self.updates_count < 50:  # Solo nelle prime fasi dell'addestramento
+            if self.updates_count < 50:
                 current_noise = self.action_noise * (self.noise_decay ** self.updates_count)
                 noise = np.random.normal(0, current_noise, size=self.action_dim)
                 raw_action = raw_action + noise
-        
-        # Limita l'azione nell'intervallo [-1, 1]
         raw_action = np.clip(raw_action, -1.0, 1.0)
-        
-        # Applichiamo una funzione di scaling non lineare per ridurre la probabilità di saturazione
-        # Questa trasformazione rende più difficile raggiungere i valori estremi
-        # Usiamo una funzione sigmoidale modificata che si appiattisce vicino ai limiti
         scaled_action = np.tanh(raw_action * 0.7) * 0.9
-        
         return scaled_action
         
     def compute_gae(self, next_value):
-        # Convert to numpy arrays for easier computation
         rewards = np.array(self.rewards)
         values = np.append(np.array(self.values), next_value)
         dones = np.array(self.dones)
         
-        # Initialize advantages array
         advantages = np.zeros_like(rewards)
         gae = 0
-        
-        # Compute advantages using GAE
         for t in reversed(range(len(rewards))):
-            if t == len(rewards) - 1:
-                next_non_terminal = 1.0 - dones[t]
-                next_value = values[t + 1]
-            else:
-                next_non_terminal = 1.0 - dones[t]
-                next_value = values[t + 1]
-                
-            delta = rewards[t] + GAMMA * next_value * next_non_terminal - values[t]
+            next_non_terminal = 1.0 - dones[t]
+            next_val = values[t + 1]
+            delta = rewards[t] + GAMMA * next_val * next_non_terminal - values[t]
             gae = delta + GAMMA * GAE_LAMBDA * next_non_terminal * gae
             advantages[t] = gae
-            
-        # Compute returns (value targets)
         returns = advantages + np.array(self.values)
-        
         return advantages, returns
         
     def update(self):
-        # Increment update counter
         self.updates_count += 1
+        self.entropy_coef = max(self.min_entropy_coef, self.entropy_coef * self.entropy_decay)
         
-        # Decay entropy coefficient
-        self.entropy_coef = max(self.min_entropy_coef, 
-                               self.entropy_coef * self.entropy_decay)
-        
-        # Get last state value for bootstrapping
         state = torch.FloatTensor(self.states[-1]).to(self.device)
         with torch.no_grad():
             _, next_value = self.policy(state)
             next_value = next_value.item()
             
-        # Compute advantages and returns
         advantages, returns = self.compute_gae(next_value)
         
-        # Convert to tensors
         states = torch.FloatTensor(np.array(self.states)).to(self.device)
         actions = torch.FloatTensor(np.array(self.actions)).to(self.device)
         old_log_probs = torch.FloatTensor(np.array(self.log_probs)).to(self.device)
         advantages = torch.FloatTensor(advantages).to(self.device)
         returns = torch.FloatTensor(returns).to(self.device)
         
-        # Normalize advantages
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         
-        # Create mini-batches
         batch_size = min(BATCH_SIZE, len(self.states))
         indices = np.arange(len(self.states))
         
-        # PPO update for multiple epochs
         for _ in range(EPOCHS):
             np.random.shuffle(indices)
-            
             for start_idx in range(0, len(self.states), batch_size):
                 end_idx = min(start_idx + batch_size, len(self.states))
                 mb_indices = indices[start_idx:end_idx]
-                
-                # Get mini-batch
                 mb_states = states[mb_indices]
                 mb_actions = actions[mb_indices]
                 mb_old_log_probs = old_log_probs[mb_indices]
                 mb_advantages = advantages[mb_indices]
                 mb_returns = returns[mb_indices]
                 
-                # Evaluate actions and values
                 new_log_probs, values, entropy = self.policy.evaluate(mb_states, mb_actions)
-                
-                # Compute policy ratio
                 ratio = torch.exp(new_log_probs - mb_old_log_probs)
-                
-                # Compute surrogate losses
                 surr1 = ratio * mb_advantages
                 surr2 = torch.clamp(ratio, 1.0 - CLIP_EPSILON, 1.0 + CLIP_EPSILON) * mb_advantages
-                
-                # Compute losses
                 policy_loss = -torch.min(surr1, surr2).mean()
                 
-                # Reshape returns to match the shape of values (fixing the broadcasting warning)
                 mb_returns = mb_returns.view(-1, 1)
                 value_loss = nn.MSELoss()(values, mb_returns)
-                
                 entropy_loss = -entropy.mean()
                 
-                # Use decaying entropy coefficient
                 current_entropy_coef = self.entropy_coef
-                
-                # Aumentiamo il peso dell'entropia nelle prime fasi per favorire l'esplorazione
                 if self.updates_count < 100:
                     exploration_bonus = max(0, 100 - self.updates_count) / 100.0
                     current_entropy_coef *= (1.0 + exploration_bonus)
                 
-                # Total loss
                 loss = policy_loss + VALUE_COEF * value_loss - current_entropy_coef * entropy_loss
                 
-                # Update networks
                 self.optimizer.zero_grad()
                 loss.backward()
-                # Clip gradients
                 nn.utils.clip_grad_norm_(self.policy.parameters(), MAX_GRAD_NORM)
                 self.optimizer.step()
                 
-        # Print current entropy coefficient every 10 updates
         if self.updates_count % 10 == 0:
             print(f"Current entropy coefficient: {self.entropy_coef:.5f}, Noise level: {self.action_noise * (self.noise_decay ** self.updates_count):.5f}")
-            
-        # Reset buffers after update
         self.reset_buffers()
         
     def save(self, filename, **kwargs):
-        """Save model with additional information"""
         checkpoint = {
             'model_state_dict': self.policy.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
@@ -668,24 +518,16 @@ class PPOAgent:
             'action_noise': self.action_noise,
             'noise_decay': self.noise_decay
         }
-        
-        # Add any additional kwargs to the checkpoint
         for key, value in kwargs.items():
             checkpoint[key] = value
-            
         torch.save(checkpoint, filename)
         
     def load(self, checkpoint_path):
-        """Load model and training state from checkpoint"""
         try:
             checkpoint = torch.load(checkpoint_path)
-            
-            # Check if it's a new-style checkpoint with state_dict or just the state_dict directly
             if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
                 self.policy.load_state_dict(checkpoint['model_state_dict'])
                 self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-                
-                # Restore other training parameters if available
                 if 'entropy_coef' in checkpoint:
                     self.entropy_coef = checkpoint['entropy_coef']
                 if 'updates_count' in checkpoint:
@@ -694,29 +536,22 @@ class PPOAgent:
                     self.action_noise = checkpoint['action_noise']
                 if 'noise_decay' in checkpoint:
                     self.noise_decay = checkpoint['noise_decay']
-                    
-                return checkpoint  # Return full checkpoint for other parameters
+                return checkpoint
             else:
-                # Legacy loading for old models
                 self.policy.load_state_dict(checkpoint)
-                return {}  # Return empty dict for legacy models
-                
+                return {}
         except Exception as e:
             print(f"Error loading checkpoint: {e}")
             return {}
 
 
-# Training function
 def train_ppo(num_episodes=NUM_EPISODES, save_interval=SAVE_INTERVAL, eval_interval=EVAL_INTERVAL, 
-            render_training=RENDER_TRAINING, checkpoint_path=CHECKPOINT_PATH):
-    # Create environment with rendering disabled for faster training
+              render_training=RENDER_TRAINING, checkpoint_path=CHECKPOINT_PATH):
     env = WolfSheepEnv(num_sheeps=NUM_SHEEPS, render_mode=None)
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
     
     agent = PPOAgent(state_dim, action_dim)
-    
-    # Load from checkpoint if specified
     start_episode = 1
     best_mean_reward = -float('inf')
     episode_rewards = []
@@ -724,30 +559,22 @@ def train_ppo(num_episodes=NUM_EPISODES, save_interval=SAVE_INTERVAL, eval_inter
     if checkpoint_path:
         print(f"Loading model from checkpoint: {checkpoint_path}")
         checkpoint = agent.load(checkpoint_path)
-        
         if 'episode' in checkpoint:
             start_episode = checkpoint['episode'] + 1
             print(f"Resuming training from episode {start_episode}")
-        
         if 'best_mean_reward' in checkpoint:
             best_mean_reward = checkpoint['best_mean_reward']
             print(f"Previous best mean reward: {best_mean_reward:.2f}")
-        
         if 'episode_rewards' in checkpoint:
             episode_rewards = checkpoint['episode_rewards']
             print(f"Loaded {len(episode_rewards)} previous episode rewards")
-            
         print(f"Entropy coefficient: {agent.entropy_coef:.5f}")
         print(f"Updates count: {agent.updates_count}")
         print("Checkpoint loaded successfully!")
     
-    # Create directory for saving models
     os.makedirs("ppo_models", exist_ok=True)
-    
-    # For statistics
     mean_rewards = deque(maxlen=100)
     if len(episode_rewards) > 0:
-        # Initialize mean_rewards with the last rewards (up to 100)
         for r in episode_rewards[-100:]:
             mean_rewards.append(r)
     
@@ -757,60 +584,38 @@ def train_ppo(num_episodes=NUM_EPISODES, save_interval=SAVE_INTERVAL, eval_inter
         done = False
         
         while not done:
-            # Get action
             action = agent.get_action(state)
-            
-            # Get value and log probability of action
             state_tensor = torch.FloatTensor(state).unsqueeze(0).to(agent.device)
             with torch.no_grad():
                 dist, value = agent.policy(state_tensor)
                 action_tensor = torch.FloatTensor(action).to(agent.device)
                 log_prob = dist.log_prob(action_tensor).sum().item()
-            
-            # Take step in environment
             next_state, reward, done, _, _ = env.step(action)
-            
-            # Remember experience
             agent.remember(state, action, reward, value.item(), log_prob, done)
-            
-            # Update state and accumulate reward
             state = next_state
             episode_reward += reward
-            
-            # If render_training is enabled (which is False by default), render the environment
             if render_training:
                 env.render()
-                
-            # If we've collected enough steps, update the policy
             if len(agent.states) >= NUM_STEPS or done:
                 agent.update()
         
-        # Track statistics
         episode_rewards.append(episode_reward)
         mean_rewards.append(episode_reward)
         mean_reward = np.mean(mean_rewards)
         
-        # Save best model
         if mean_reward > best_mean_reward and episode > 100:
             best_mean_reward = mean_reward
-            
-            # Save as full checkpoint
             agent.save("ppo_models/best_model.pth", 
-                      episode=episode, 
-                      best_mean_reward=best_mean_reward,
-                      episode_rewards=episode_rewards)
-            
+                       episode=episode, 
+                       best_mean_reward=best_mean_reward,
+                       episode_rewards=episode_rewards)
             print(f"New best model saved with mean reward: {best_mean_reward:.2f}")
         
-        # Save model periodically
         if episode % save_interval == 0:
-            # Save as full checkpoint
             agent.save(f"ppo_models/model_{episode}.pth",
-                      episode=episode,
-                      best_mean_reward=best_mean_reward,
-                      episode_rewards=episode_rewards)
-            
-            # Plot and save rewards
+                       episode=episode,
+                       best_mean_reward=best_mean_reward,
+                       episode_rewards=episode_rewards)
             plt.figure(figsize=(10, 5))
             plt.plot(episode_rewards)
             plt.title("Episode Rewards")
@@ -819,46 +624,28 @@ def train_ppo(num_episodes=NUM_EPISODES, save_interval=SAVE_INTERVAL, eval_inter
             plt.savefig(f"ppo_models/rewards_{episode}.png")
             plt.close()
         
-        # Evaluate model periodically using a separate environment with rendering
         if episode % eval_interval == 0:
             print(f"\n--- Evaluating model at episode {episode} ---")
-            
-            # Create evaluation environment with rendering
             eval_env = WolfSheepEnv(num_sheeps=NUM_SHEEPS, render_mode="human")
-            
-            # Run evaluation
             eval_rewards = []
             eval_state, _ = eval_env.reset()
             eval_reward = 0
             eval_done = False
-            
             while not eval_done:
-                # Get deterministic action
                 eval_action = agent.get_action(eval_state, deterministic=True)
-                
-                # Take step
                 eval_next_state, eval_rew, eval_done, _, _ = eval_env.step(eval_action)
-                
-                # Update
                 eval_state = eval_next_state
                 eval_reward += eval_rew
-                
-                # Render
                 eval_env.render()
-                pygame.time.delay(5)  # Slow down for better visualization
-            
+                pygame.time.delay(5)
             eval_rewards.append(eval_reward)
             print(f"Evaluation Episode, Reward: {eval_reward:.2f}")
-            
             print(f"Average Evaluation Reward: {np.mean(eval_rewards):.2f}")
             print("--- Evaluation complete ---\n")
         
         print(f"Episode: {episode}, Reward: {episode_reward:.2f}, Mean Reward: {mean_reward:.2f}")
     
-    # Save final model
     agent.save("ppo_models/final_model.pth")
-    
-    # Final reward plot
     plt.figure(figsize=(10, 5))
     plt.plot(episode_rewards)
     plt.title("Episode Rewards")
@@ -866,18 +653,14 @@ def train_ppo(num_episodes=NUM_EPISODES, save_interval=SAVE_INTERVAL, eval_inter
     plt.ylabel("Reward")
     plt.savefig("ppo_models/final_rewards.png")
     plt.close()
-
-    # Close pygame if it was initialized
     pygame.quit()
     return agent
 
 
-# Evaluation function
 def evaluate_ppo(model_path, num_episodes=10, render=True):
     env = WolfSheepEnv(num_sheeps=NUM_SHEEPS, render_mode="human" if render else None)
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
-    
     agent = PPOAgent(state_dim, action_dim)
     agent.load(model_path)
     
@@ -885,32 +668,22 @@ def evaluate_ppo(model_path, num_episodes=10, render=True):
         state, _ = env.reset()
         episode_reward = 0
         done = False
-        
         while not done:
-            # Get deterministic action
             action = agent.get_action(state, deterministic=True)
-            
-            # Take step
             next_state, reward, done, _, _ = env.step(action)
-            
-            # Update
             state = next_state
             episode_reward += reward
-            
-            # Render
             if render:
                 env.render()
-                pygame.time.delay(30)  # Slow down for better visualization
-        
+                pygame.time.delay(30)
         print(f"Evaluation Episode {episode+1}/{num_episodes}, Reward: {episode_reward:.2f}")
     
     pygame.quit()
 
 
 if __name__ == "__main__":
-    # Train a PPO agent with evaluation every 100 episodes, but without rendering during training
-    agent = train_ppo(num_episodes=NUM_EPISODES, save_interval=SAVE_INTERVAL, eval_interval=EVAL_INTERVAL, render_training=RENDER_TRAINING, checkpoint_path=CHECKPOINT_PATH)
-    
-    # Final evaluation of the best model
+    agent = train_ppo(num_episodes=NUM_EPISODES, save_interval=SAVE_INTERVAL, 
+                      eval_interval=EVAL_INTERVAL, render_training=RENDER_TRAINING, 
+                      checkpoint_path=CHECKPOINT_PATH)
     print("\n--- Final Evaluation of Best Model ---")
     evaluate_ppo("ppo_models/best_model.pth", num_episodes=5, render=True)
