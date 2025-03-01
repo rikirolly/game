@@ -18,8 +18,8 @@ WOLF_SPEED_LIMIT = 10.0         # Soglia aggiornata per la velocità del lupo
 WOLF_ACCEL_LIMIT = 3.0          # Soglia aggiornata per l'accelerazione del lupo
 WOLF_MAGNITUDE_SCALING = 0.5
 WOLF_ANGLE_SCALING = 0.5
-SHEEP_SPEED_LIMIT = 1.0
-SHEEP_ACCEL_LIMIT = 1.0
+SHEEP_SPEED_LIMIT = 0.0
+SHEEP_ACCEL_LIMIT = 0.0
 SHEEP_MAGNITUDE_SCALING = 0.5
 SHEEP_ANGLE_SCALING = 0.5
 WOLF_INITIAL_ENERGY = 1000
@@ -33,7 +33,7 @@ BACKGROUND_COLOR = (125, 125, 125)
 WOLVES_COLOR = (0, 0, 0)
 SHEEPS_COLOR = (255, 255, 255)
 
-NUM_SHEEPS = 1
+NUM_SHEEPS = 3
 
 # Costante per la normalizzazione della distanza toroidale (massima distanza)
 MAX_TOROIDAL_DISTANCE = np.sqrt((X_LIMIT/2)**2 + (Y_LIMIT/2)**2)
@@ -70,7 +70,7 @@ EVAL_ONLY = False
 pygame.init()
 screen = pygame.display.set_mode((X_LIMIT, Y_LIMIT))
 pygame.font.init()
-myfont = pygame.font.SysFont('Comic Sans MS', 12)
+myfont = pygame.font.SysFont('Comic Sans MS', 20)
 
 
 class Sheep:
@@ -143,14 +143,14 @@ class Wolf:
 
     def update(self, magnitude_accel_delta, angle_accel_delta):
         # Scala in modo non lineare per evitare saturazione
-        magnitude_accel_delta = np.tanh(magnitude_accel_delta * 0.8) * 0.95
-        angle_accel_delta = np.tanh(angle_accel_delta * 0.8) * 0.95
+        # magnitude_accel_delta = np.tanh(magnitude_accel_delta * 0.8) * 0.95
+        # angle_accel_delta = np.tanh(angle_accel_delta * 0.8) * 0.95
 
-        magnitude_accel_delta = np.clip(magnitude_accel_delta, -1, 1)
-        angle_accel_delta = np.clip(angle_accel_delta, -1, 1)
+        # magnitude_accel_delta = np.clip(magnitude_accel_delta, -1, 1)
+        # angle_accel_delta = np.clip(angle_accel_delta, -1, 1)
 
-        magnitude_accel_delta *= WOLF_MAGNITUDE_SCALING
-        angle_accel_delta *= WOLF_ANGLE_SCALING
+        # magnitude_accel_delta *= WOLF_MAGNITUDE_SCALING
+        # angle_accel_delta *= WOLF_ANGLE_SCALING
 
         self.magnitude_accel += magnitude_accel_delta
         self.magnitude_accel = np.clip(self.magnitude_accel, 0.0, WOLF_ACCEL_LIMIT)
@@ -313,12 +313,21 @@ class WolfSheepEnv(gym.Env):
                 min_magnitude = magnitude
                 closest_sheep = sheep
 
-        reward = -0.01
-        proximity_reward = 1.0 / (1.0 + min_magnitude / 50)
-        reward += proximity_reward * 0.5
+        # self.reward = -0.01
+        self.reward = 0
+        if self.steps == 1:
+            self.prev_min_magnitude = min_magnitude
+        delta_min_magnitude = min_magnitude - self.prev_min_magnitude
+        self.prev_min_magnitude = min_magnitude
+
+        # proximity_reward = 1.0 / (1.0 + min_magnitude / 50)
+        # self.reward += proximity_reward * 0.5
+
+        # self.reward -= delta_min_magnitude * 0.1
+        self.reward -= 1 if delta_min_magnitude >= 0 else -1
 
         if min_magnitude < MAGNITUDE_THRESHOLD:
-            reward += 10.0
+            self.reward += 10.0
             if closest_sheep:
                 closest_sheep.reset()
 
@@ -327,13 +336,13 @@ class WolfSheepEnv(gym.Env):
         if wolf_speed > WOLF_SPEED_LIMIT * 0.85:
             proximity_to_limit = (wolf_speed - WOLF_SPEED_LIMIT * 0.85) / (WOLF_SPEED_LIMIT * 0.15)
             speed_limit_penalty = (proximity_to_limit ** 2) * 0.1
-        reward -= speed_limit_penalty
+        # self.reward -= speed_limit_penalty
 
         # Sottrai la penalità proporzionale alla distanza percorsa
-        reward -= distance_penalty
+        # self.reward -= distance_penalty
 
         done = self.steps >= self.max_steps
-        return self._get_obs(), reward, done, False, {
+        return self._get_obs(), self.reward, done, False, {
             "magnitude": min_magnitude,
             "wolf_speed": wolf_speed,
             "speed_limit_penalty": speed_limit_penalty,
@@ -348,7 +357,7 @@ class WolfSheepEnv(gym.Env):
         self.wolf.draw(screen)
         for sheep in self.sheeps:
             sheep.draw(screen)
-        text = myfont.render(f"Steps: {self.steps}", False, (0, 0, 0))
+        text = myfont.render(f"Reward: {self.reward}", False, (0, 0, 0))
         screen.blit(text, (10, 10))
         pygame.display.update()
 
@@ -357,7 +366,14 @@ class WolfSheepEnv(gym.Env):
 class ActorCritic(nn.Module):
     def __init__(self, state_dim, action_dim, device=None):
         super(ActorCritic, self).__init__()
-        self.device = device if device is not None else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if device is not None:
+            self.device = device
+        elif torch.cuda.is_available():
+            self.device = torch.device("cuda")
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            self.device = torch.device("mps")
+        else:
+            self.device = torch.device("cpu")
         
         # Rete condivisa con 3 layer e 128 neuroni ciascuno
         self.shared = nn.Sequential(
@@ -410,7 +426,13 @@ class PPOAgent:
     def __init__(self, state_dim, action_dim):
         self.state_dim = state_dim
         self.action_dim = action_dim
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        if torch.cuda.is_available():
+            self.device = torch.device("cuda")
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            self.device = torch.device("mps")
+        else:
+            self.device = torch.device("cpu")
         
         self.policy = ActorCritic(state_dim, action_dim, device=self.device)
         self.optimizer = optim.Adam(self.policy.parameters(), lr=LEARNING_RATE)
@@ -600,73 +622,84 @@ def train_ppo(num_episodes=NUM_EPISODES, save_interval=SAVE_INTERVAL, eval_inter
         for r in episode_rewards[-100:]:
             mean_rewards.append(r)
     
-    for episode in range(start_episode, num_episodes + 1):
-        state, _ = env.reset()
-        episode_reward = 0
-        done = False
-        
-        while not done:
-            action = agent.get_action(state)
-            state_tensor = torch.FloatTensor(state).unsqueeze(0).to(agent.device)
-            with torch.no_grad():
-                dist, value = agent.policy(state_tensor)
-                action_tensor = torch.FloatTensor(action).to(agent.device)
-                log_prob = dist.log_prob(action_tensor).sum().item()
-            next_state, reward, done, _, _ = env.step(action)
-            agent.remember(state, action, reward, value.item(), log_prob, done)
-            state = next_state
-            episode_reward += reward
-            if render_training:
-                env.render()
-            if len(agent.states) >= NUM_STEPS or done:
-                agent.update()
-        
-        episode_rewards.append(episode_reward)
-        mean_rewards.append(episode_reward)
-        mean_reward = np.mean(mean_rewards)
-        
-        if mean_reward > best_mean_reward and episode > 100:
-            best_mean_reward = mean_reward
-            agent.save("ppo_models/best_model.pth", 
-                       episode=episode, 
-                       best_mean_reward=best_mean_reward,
-                       episode_rewards=episode_rewards)
-            print(f"New best model saved with mean reward: {best_mean_reward:.2f}")
-        
-        if episode % save_interval == 0:
-            agent.save(f"ppo_models/model_{episode}.pth",
-                       episode=episode,
-                       best_mean_reward=best_mean_reward,
-                       episode_rewards=episode_rewards)
-            plt.figure(figsize=(10, 5))
-            plt.plot(episode_rewards)
-            plt.title("Episode Rewards")
-            plt.xlabel("Episode")
-            plt.ylabel("Reward")
-            plt.savefig(f"ppo_models/rewards_{episode}.png")
-            plt.close()
-        
-        if episode % eval_interval == 0:
-            print(f"\n--- Evaluating model at episode {episode} ---")
-            eval_env = WolfSheepEnv(num_sheeps=NUM_SHEEPS, render_mode="human")
-            eval_rewards = []
-            eval_state, _ = eval_env.reset()
-            eval_reward = 0
-            eval_done = False
-            while not eval_done:
-                eval_action = agent.get_action(eval_state, deterministic=True)
-                eval_next_state, eval_rew, eval_done, _, _ = eval_env.step(eval_action)
-                eval_state = eval_next_state
-                eval_reward += eval_rew
-                eval_env.render()
-                pygame.time.delay(5)
-            eval_rewards.append(eval_reward)
-            print(f"Evaluation Episode, Reward: {eval_reward:.2f}")
-            print(f"Average Evaluation Reward: {np.mean(eval_rewards):.2f}")
-            print("--- Evaluation complete ---\n")
-        
-        print(f"Episode: {episode}, Reward: {episode_reward:.2f}, Mean Reward: {mean_reward:.2f}")
-    
+    try:
+        while 1:
+            for event in pygame.event.get():
+                if event.type == pygame.KEYDOWN:
+                    pygame.time.wait(10000)
+                if event.type == pygame.QUIT:
+                    return
+
+                for episode in range(start_episode, num_episodes + 1):
+                    state, _ = env.reset()
+                    episode_reward = 0
+                    done = False
+                    
+                    while not done:
+                        action = agent.get_action(state)
+                        state_tensor = torch.FloatTensor(state).unsqueeze(0).to(agent.device)
+                        with torch.no_grad():
+                            dist, value = agent.policy(state_tensor)
+                            action_tensor = torch.FloatTensor(action).to(agent.device)
+                            log_prob = dist.log_prob(action_tensor).sum().item()
+                        next_state, reward, done, _, _ = env.step(action)
+                        agent.remember(state, action, reward, value.item(), log_prob, done)
+                        state = next_state
+                        episode_reward += reward
+                        if render_training:
+                            env.render()
+                        if len(agent.states) >= NUM_STEPS or done:
+                            agent.update()
+                    
+                    episode_rewards.append(episode_reward)
+                    mean_rewards.append(episode_reward)
+                    mean_reward = np.mean(mean_rewards)
+                    
+                    if mean_reward > best_mean_reward and episode > 100:
+                        best_mean_reward = mean_reward
+                        agent.save("ppo_models/best_model.pth", 
+                                episode=episode, 
+                                best_mean_reward=best_mean_reward,
+                                episode_rewards=episode_rewards)
+                        print(f"New best model saved with mean reward: {best_mean_reward:.2f}")
+                    
+                    if episode % save_interval == 0:
+                        agent.save(f"ppo_models/model_{episode}.pth",
+                                episode=episode,
+                                best_mean_reward=best_mean_reward,
+                                episode_rewards=episode_rewards)
+                        plt.figure(figsize=(10, 5))
+                        plt.plot(episode_rewards)
+                        plt.title("Episode Rewards")
+                        plt.xlabel("Episode")
+                        plt.ylabel("Reward")
+                        plt.savefig(f"ppo_models/rewards_{episode}.png")
+                        plt.close()
+                    
+                    if episode % eval_interval == 0:
+                        print(f"\n--- Evaluating model at episode {episode} ---")
+                        eval_env = WolfSheepEnv(num_sheeps=NUM_SHEEPS, render_mode="human")
+                        eval_rewards = []
+                        eval_state, _ = eval_env.reset()
+                        eval_reward = 0
+                        eval_done = False
+                        while not eval_done:
+                            eval_action = agent.get_action(eval_state, deterministic=True)
+                            eval_next_state, eval_rew, eval_done, _, _ = eval_env.step(eval_action)
+                            eval_state = eval_next_state
+                            eval_reward += eval_rew
+                            eval_env.render()
+                            pygame.time.delay(10)
+                        eval_rewards.append(eval_reward)
+                        print(f"Evaluation Episode, Reward: {eval_reward:.2f}")
+                        print(f"Average Evaluation Reward: {np.mean(eval_rewards):.2f}")
+                        print("--- Evaluation complete ---\n")
+                    
+                    print(f"Episode: {episode}, Reward: {episode_reward:.2f}, Mean Reward: {mean_reward:.2f}")
+    finally:
+        env.close()
+        pygame.quit()
+
     agent.save("ppo_models/final_model.pth")
     plt.figure(figsize=(10, 5))
     plt.plot(episode_rewards)
@@ -675,7 +708,7 @@ def train_ppo(num_episodes=NUM_EPISODES, save_interval=SAVE_INTERVAL, eval_inter
     plt.ylabel("Reward")
     plt.savefig("ppo_models/final_rewards.png")
     plt.close()
-    pygame.quit()
+    
     return agent
 
 
