@@ -65,18 +65,27 @@ def compute_gae(rewards, masks, values, next_value, gamma, lam):
     return advantages, returns
 
 
-class CustomTrackCartPole(gym.Env):
-    def __init__(self):
-        # Crea l'ambiente originale
-        self.env = gym.make('CartPole-v1')
+class CustomTrackCartPole(gym.CartPoleEnv):
+    metadata = {
+
+        "render_modes": ["human", "rgb_array"],
+        "render_fps": 50,
+    }
+    
+    def __init__(self, render_mode=None):
+        # Pass the render_mode to the gym environment
+        self.env = gym.make('CartPole-v1', render_mode=None)
         
-        # Modifica la soglia di posizione x
-        self.x_threshold = 2.4*10  # Doppio della soglia originale (2.4)
+        self.env = gym.wrappers.Autoreset(self.env)
+        
+        # Raddoppia la soglia x
+        self.x_threshold = 2.4*10  # doppio dell'originale (2.4)
+        self.env.unwrapped.theta_threshold_radians = np.pi * 3  # 2pi
         
         # Mantieni lo stesso spazio di azione
         self.action_space = self.env.action_space
         
-        # Ridefinisci lo spazio di osservazione con la nuova soglia
+        # Ridefinisci lo spazio di osservazione
         high = np.array(
             [
                 self.x_threshold,
@@ -88,31 +97,126 @@ class CustomTrackCartPole(gym.Env):
         )
         self.observation_space = spaces.Box(-high, high, dtype=np.float32)
         
+        self.render_mode = render_mode
+        self.screen = None
+        self.screen_width = 1200  # più largo per ospitare la rotaia più lunga
+        self.screen_height = 400
+        self.clock = None
+        
     def reset(self, **kwargs):
         observation, info = self.env.reset(**kwargs)
         return observation, info
-    
+        
     def step(self, action):
         observation, reward, terminated, truncated, info = self.env.step(action)
         
-        # Modifica la condizione di terminazione basata sulla posizione x
+        # Estrai le componenti dell'osservazione
         x = observation[0]
+        theta = observation[2]  # l'angolo dell'asta
+        
+        # Terminazione basata SOLO sulla posizione x (ignora l'angolo)
         done_x = bool(
             x < -self.x_threshold
             or x > self.x_threshold
         )
         
-        # Aggiorna terminated solo se la posizione x è oltre la nuova soglia
-        if done_x and not terminated:
+        # Sovrascrivi la condizione terminated dell'ambiente originale
+        # Termina solo se fuori dai limiti x
+        if terminated:
+            # Verifica se è stato terminato per l'angolo
+            if abs(theta) > self.env.unwrapped.theta_threshold_radians and not done_x:
+                # Ignora la terminazione se è dovuta solo all'angolo
+                terminated = False
+        
+        # Assicurati di terminare se il carrello è fuori dai limiti estesi
+        if done_x:
             terminated = True
         
         return observation, reward, terminated, truncated, info
     
     def render(self):
-        return self.env.render()
+        if self.render_mode is None:
+            return
+            
+        import pygame
+        from pygame import gfxdraw
+        
+        if self.screen is None:
+            pygame.init()
+            if self.render_mode == "human":
+                pygame.display.init()
+                self.screen = pygame.display.set_mode((self.screen_width, self.screen_height))
+            else:  # rgb_array
+                self.screen = pygame.Surface((self.screen_width, self.screen_height))
+            
+        if self.clock is None:
+            self.clock = pygame.time.Clock()
+            
+        self.surf = pygame.Surface((self.screen_width, self.screen_height))
+        self.surf.fill((255, 255, 255))
+        
+        # Ottieni lo stato dall'ambiente originale
+        x, x_dot, theta, theta_dot = self.env.unwrapped.state
+        
+        # Scala per la visualizzazione
+        world_width = self.x_threshold * 2
+        scale = self.screen_width / world_width
+        cart_y = 200  # posizione verticale del carrello
+        pole_length = scale * (2 * self.env.unwrapped.length) * 5
+        
+        # Disegna la rotaia
+        pygame.draw.line(
+            self.surf,
+            (0, 0, 0),
+            (0, cart_y),
+            (self.screen_width, cart_y),
+            1
+        )
+        
+        # Disegna il carrello
+        cart_x = x * scale + self.screen_width / 2.0
+        cart_width = 40
+        cart_height = 30
+        
+        rect = pygame.Rect(
+            cart_x - cart_width / 2,
+            cart_y - cart_height / 2,
+            cart_width,
+            cart_height
+        )
+        pygame.draw.rect(self.surf, (0, 0, 0), rect)
+        
+        # Disegna il palo
+        pole_x = np.sin(theta) * pole_length
+        pole_y = np.cos(theta) * pole_length
+        
+        pygame.draw.line(
+            self.surf,
+            (0, 0, 255),
+            (cart_x, cart_y),
+            (cart_x + pole_x, cart_y + pole_y),
+            6
+        )
+        
+        # Aggiorna lo schermo
+        self.surf = pygame.transform.flip(self.surf, False, True)
+        self.screen.blit(self.surf, (0, 0))
+        
+        if self.render_mode == "human":
+            pygame.event.pump()
+            self.clock.tick(self.metadata["render_fps"])
+            pygame.display.flip()
+            
+        elif self.render_mode == "rgb_array":
+            return np.transpose(
+                np.array(pygame.surfarray.pixels3d(self.screen)), axes=(1, 0, 2)
+            )
     
     def close(self):
-        self.env.close()
+        if self.screen is not None:
+            import pygame
+            pygame.quit()
+            self.screen = None
 
 
 
@@ -241,38 +345,24 @@ for update in range(1, num_updates + 1):
     # Visualizzazione di un episodio ogni sim_interval update
     if update % sim_interval == 0:
         print("Visualizzazione episodio con modello attuale...")
-        sim_env = gym.make("CartPole-v1", render_mode="human")
-        sim_obs, sim_info = sim_env.reset()
-        sim_done = False
-        sim_obs_tensor = torch.FloatTensor(sim_obs).to(device)
-        while not sim_done:
+        # Usa il tuo ambiente personalizzato invece di quello standard
+        sim_env = CustomTrackCartPole(render_mode="human")
+
+        obs_sim, info = sim_env.reset()
+        done = False
+        obs_sim_tensor = torch.FloatTensor(obs_sim).to(device)
+        while not done:
+            sim_env.render()
             with torch.no_grad():
-                logits, _ = model.forward(sim_obs_tensor.unsqueeze(0))
+                logits, _ = model.forward(obs_sim_tensor.unsqueeze(0))
                 probs = torch.softmax(logits, dim=-1)
                 action = torch.argmax(probs, dim=-1).item()
-            sim_obs, sim_reward, sim_terminated, sim_truncated, sim_info = sim_env.step(action)
-            sim_done = sim_terminated or sim_truncated
-            sim_obs_tensor = torch.FloatTensor(sim_obs).to(device)
+            obs_sim, sim_reward, terminated, truncated, sim_info = sim_env.step(action)
+            done = terminated or truncated
+            obs_sim_tensor = torch.FloatTensor(obs_sim).to(device)
             time.sleep(0.02)
         sim_env.close()
 
 # Chiusura degli ambienti vettorializzati al termine del training
 vec_env.close()
 print("Training completato!")
-
-# ------------------ Simulazione finale ------------------
-print("Visualizzazione episodio finale con modello allenato...")
-sim_env = gym.make("CartPole-v1", render_mode="human")
-obs_sim, info = sim_env.reset()
-done = False
-obs_sim_tensor = torch.FloatTensor(obs_sim).to(device)
-while not done:
-    with torch.no_grad():
-        logits, _ = model.forward(obs_sim_tensor.unsqueeze(0))
-        probs = torch.softmax(logits, dim=-1)
-        action = torch.argmax(probs, dim=-1).item()
-    obs_sim, reward, terminated, truncated, info = sim_env.step(action)
-    done = terminated or truncated
-    obs_sim_tensor = torch.FloatTensor(obs_sim).to(device)
-    time.sleep(0.02)
-sim_env.close()
