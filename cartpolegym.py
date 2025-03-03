@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import time
+from gymnasium.envs.classic_control.cartpole import CartPoleEnv
 
 # Configurazione del dispositivo (GPU se disponibile)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -65,7 +66,7 @@ def compute_gae(rewards, masks, values, next_value, gamma, lam):
     return advantages, returns
 
 
-class CustomTrackCartPole(gym.CartPoleEnv):
+class CustomTrackCartPole(CartPoleEnv):
     metadata = {
 
         "render_modes": ["human", "rgb_array"],
